@@ -1,47 +1,38 @@
 import win32serviceutil
 import win32service
 import win32event
-import servicemanager
-import logging
 import time
-import os
+import logging
 
-# Cấu hình log
+# Cấu hình logging
 logging.basicConfig(
-    filename=os.path.join(os.getcwd(), "service.log"),
+    filename='simple_service.log',
     level=logging.INFO,
-    format='%(asctime)s - %(message)s'
+    format='%(asctime)s - %(message)s',
 )
 
-class DemoService(win32serviceutil.ServiceFramework):
-    _svc_name_ = "DemoService"
-    _svc_display_name_ = "Demo Python Service"
-    _svc_description_ = "A demo Windows Service written in Python."
+class SimpleService(win32serviceutil.ServiceFramework):
+    _svc_name_ = "SimplePythonService"  # Tên của service
+    _svc_display_name_ = "Simple Python Service"  # Tên hiển thị trong Services
+    _svc_description_ = "A simple Python service that logs messages periodically."
 
     def __init__(self, args):
         super().__init__(args)
-        self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
+        self.stop_event = win32event.CreateEvent(None, 0, 0, None)
         self.running = True
 
     def SvcStop(self):
-        logging.info("Service is stopping...")
-        self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-        win32event.SetEvent(self.hWaitStop)
         self.running = False
+        win32event.SetEvent(self.stop_event)
+        logging.info("Service is stopping...")
+        self.ReportServiceStatus(win32service.SERVICE_STOPPED)
 
     def SvcDoRun(self):
         logging.info("Service is starting...")
-        servicemanager.LogMsg(
-            servicemanager.EVENTLOG_INFORMATION_TYPE,
-            servicemanager.PYS_SERVICE_STARTED,
-            (self._svc_name_, "")
-        )
-        self.main()
-
-    def main(self):
         while self.running:
             logging.info("Service is running...")
-            time.sleep(60)  # Thực hiện công việc mỗi phút
+            time.sleep(5)  # Lặp lại mỗi 5 giây
+        logging.info("Service has stopped.")
 
 if __name__ == "__main__":
-    win32serviceutil.HandleCommandLine(DemoService)
+    win32serviceutil.HandleCommandLine(SimpleService)
