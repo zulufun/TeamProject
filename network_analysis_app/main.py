@@ -1,5 +1,5 @@
-from ui import WiresharkApp
 import tkinter as tk
+from ui import WiresharkApp
 
 def main():
     root = tk.Tk()
