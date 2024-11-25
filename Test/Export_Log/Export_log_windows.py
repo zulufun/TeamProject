@@ -63,3 +63,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = EventViewerApp(root)
     root.mainloop()
+# Phần này sẽ lấy log mới trước sau đó sẽ req lại nhiều ần để lấy log càng ngày càng cũ hơn
