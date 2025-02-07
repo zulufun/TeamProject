@@ -11,6 +11,7 @@ from scapy.all import wrpcap
 from scapy.layers.inet import IP
 from scapy.layers.l2 import Ether
 
+import extra_feature  # Import file extra_feature.py
 from PIL import Image, ImageTk
 
 class IPGeolocation:
@@ -61,6 +62,7 @@ class IPGeolocation:
 
 class WiresharkApp:
     def __init__(self, master):
+
         self.master = master
         master.title("Wireshark App")
 
@@ -74,7 +76,12 @@ class WiresharkApp:
         self.file_menu.add_command(label="Save to CSV", command=self.save_to_csv)
         self.file_menu.add_separator()
         self.file_menu.add_command(label="Exit", command=master.quit)
+        # Menu mới
+        self.extra_menu = tk.Menu(self.menu, tearoff=False)
+        self.menu.add_cascade(label="Extra", menu=self.extra_menu)
+        self.extra_menu.add_command(label="New Feature", command=lambda: extra_feature.extra_future(self.master))
 
+        #######################
         self.help_menu = tk.Menu(self.menu, tearoff=False)
         self.menu.add_cascade(label="Help", menu=self.help_menu)
         self.help_menu.add_command(label="About", command=self.show_help_message)
