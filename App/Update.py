@@ -11,7 +11,9 @@ from scapy.all import wrpcap
 from scapy.layers.inet import IP
 from scapy.layers.l2 import Ether
 
-import extra_feature  # Import file extra_feature.py
+import log_feature  # Import file log_feature.py
+import speed_test
+import LAN_device
 from PIL import Image, ImageTk
 
 class IPGeolocation:
@@ -79,8 +81,12 @@ class WiresharkApp:
         # Menu mới
         self.extra_menu = tk.Menu(self.menu, tearoff=False)
         self.menu.add_cascade(label="Extra", menu=self.extra_menu)
-        self.extra_menu.add_command(label="New Feature", command=lambda: extra_feature.extra_future(self.master))
-
+        self.extra_menu.add_command(label="Log_analyze", command=lambda: log_feature.extra_future(self.master))
+        ##
+        self.extra_menu.add_command(label="Speed_test", command=lambda: speed_test.open_network_speed_test_window(self.master))
+        ##
+        self.extra_menu.add_command(label="Theo dõi mạng LAN",
+                                    command=lambda: LAN_device.open_detailed_network_monitor_window(self.master))
         #######################
         self.help_menu = tk.Menu(self.menu, tearoff=False)
         self.menu.add_cascade(label="Help", menu=self.help_menu)
@@ -435,3 +441,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# Phải sử dụng quyền admin để chạy
