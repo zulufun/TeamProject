@@ -1,0 +1,8 @@
+pyshark
+requests
+matplotlib
+psutil
+scapy
+pywin32
+speedtest-cli
+aiohttp
