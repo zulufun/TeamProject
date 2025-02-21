@@ -86,7 +86,7 @@ class WiresharkApp:
         self.continue_button = tk.Button(self.interface_frame, text="Continue", command=self.continue_capture,
                                          state=tk.DISABLED)
         self.continue_button.grid(row=0, column=4, padx=5)
-        self.export_button = tk.Button(self.interface_frame, text="Export to CSV", command=self.export_to_csv,
+        self.export_button = tk.Button(self.interface_frame, text="Export to CSV", command=lambda : file_manager.export_to_csv(self),
                                        state=tk.DISABLED)
         self.export_button.grid(row=0, column=5, padx=5)
 
@@ -227,23 +227,61 @@ class WiresharkApp:
             self.display_packet(packet)
         loop.close()
 
+    # def display_packet(self, packet):
+    #     if 'ip' in packet:
+    #         source_ip = packet.ip.src
+    #         dest_ip = packet.ip.dst
+    #         source_geo = IPGeolocation(source_ip)
+    #         self.tree.insert("", "end", values=(
+    #             len(self.packet_list),
+    #             packet.sniff_time.strftime('%Y-%m-%d %H:%M:%S'),
+    #             source_ip,
+    #             dest_ip,
+    #             packet.transport_layer,
+    #             packet.length,
+    #             source_geo.country,
+    #             source_geo.city,
+    #             source_geo.time_zone,
+    #             source_geo.isp
+    #         ))
     def display_packet(self, packet):
         if 'ip' in packet:
             source_ip = packet.ip.src
             dest_ip = packet.ip.dst
-            source_geo = IPGeolocation(source_ip)
-            self.tree.insert("", "end", values=(
+            # Chèn hàng vào Treeview với các trường IP ban đầu là "Loading"
+            row_id = self.tree.insert("", "end", values=(
                 len(self.packet_list),
                 packet.sniff_time.strftime('%Y-%m-%d %H:%M:%S'),
                 source_ip,
                 dest_ip,
                 packet.transport_layer,
                 packet.length,
-                source_geo.country,
-                source_geo.city,
-                source_geo.time_zone,
-                source_geo.isp
+                "Loading",  # Country
+                "Loading",  # City
+                "Loading",  # Time Zone
+                "Loading"  # ISP
             ))
+
+            # Định nghĩa callback cập nhật hàng khi thông tin IP được trả về
+            def update_geo(ip_geo):
+                # Kiểm tra xem hàng vẫn tồn tại trước khi cập nhật
+                if self.tree.exists(row_id):
+                    # Sử dụng after() để đảm bảo cập nhật trên main thread
+                    self.master.after(0, lambda: self.tree.item(row_id, values=(
+                        self.tree.item(row_id, "values")[0],  # Số thứ tự không đổi
+                        self.tree.item(row_id, "values")[1],  # Thời gian không đổi
+                        source_ip,
+                        dest_ip,
+                        packet.transport_layer,
+                        packet.length,
+                        ip_geo.country,
+                        ip_geo.city,
+                        ip_geo.time_zone,
+                        ip_geo.isp
+                    )))
+
+            # Tạo đối tượng IPGeolocation kèm callback
+            _ = IPGeolocation(source_ip, callback=update_geo)
     def display_packet_details(self, event):
         item = self.tree.selection()
         if item:
@@ -251,7 +289,6 @@ class WiresharkApp:
             packet = self.packet_list[int(self.tree.item(item, "values")[0]) - 1]
             self.log.delete(1.0, tk.END)
             self.log.insert(tk.END, str(packet))
-
 
 def main():
     root = tk.Tk()
