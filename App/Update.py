@@ -3,21 +3,20 @@ from tkinter import scrolledtext, filedialog, ttk, messagebox
 import pyshark
 import threading
 import csv
-import requests
-import matplotlib.pyplot as plt
 import asyncio
-import psutil  # Thêm thư viện psutil
+import psutil
 from scapy.all import wrpcap
 from scapy.layers.inet import IP
 from scapy.layers.l2 import Ether
 
-import log_feature  # Import file log_feature.py
+# Import các feature thêm
+import log_feature  #
 import speed_test
 import LAN_device
 from ip_geolocation import IPGeolocation
 from stats_generator import StatsGenerator
-from PIL import Image, ImageTk
-
+# Import module quản lý file
+import file_manager
 
 class WiresharkApp:
     def __init__(self, master):
@@ -35,11 +34,13 @@ class WiresharkApp:
         master.config(menu=self.menu)
 
         # File Menu
+        # File Menu
         self.file_menu = tk.Menu(self.menu, tearoff=False)
         self.menu.add_cascade(label="File", menu=self.file_menu)
-        self.file_menu.add_command(label="Open", command=self.open_file)
-        self.file_menu.add_command(label="Save to PCAP", command=self.save_to_pcap)
-        self.file_menu.add_command(label="Save to CSV", command=self.save_to_csv)
+        # Gọi đến các hàm từ file_manager thông qua lambda, truyền self vào.
+        self.file_menu.add_command(label="Open", command=lambda: file_manager.open_file(self))
+        self.file_menu.add_command(label="Save to PCAP", command=lambda: file_manager.save_to_pcap(self))
+        self.file_menu.add_command(label="Save to CSV", command=lambda: file_manager.save_to_csv(self))
         self.file_menu.add_separator()
         self.file_menu.add_command(label="Exit", command=master.quit)
 
@@ -51,11 +52,6 @@ class WiresharkApp:
                                     command=lambda: speed_test.open_network_speed_test_window(self.master))
         self.extra_menu.add_command(label="Theo dõi mạng LAN",
                                     command=lambda: LAN_device.open_detailed_network_monitor_window(self.master))
-
-        # Help Menu
-        self.help_menu = tk.Menu(self.menu, tearoff=False)
-        self.menu.add_cascade(label="Help", menu=self.help_menu)
-        self.help_menu.add_command(label="About", command=self.show_help_message)
 
         # Stats Menu
         self.stats_menu = tk.Menu(self.menu, tearoff=False)
@@ -115,11 +111,9 @@ class WiresharkApp:
 
         # ----------------- Treeview for Displaying Packets -----------------
         self.tree = ttk.Treeview(master, columns=(
-        "No.", "Time", "Source", "Destination", "Protocol", "Length", "Src_Country", "Src_City", "Src_Time_Zone",
-        "Src_Service"), show="headings")
+        "No.", "Time", "Source", "Destination", "Protocol", "Length", "Src_Country", "Src_City", "Src_Time_Zone", "Src_Service"), show="headings")
         for col in (
-        "No.", "Time", "Source", "Destination", "Protocol", "Length", "Src_Country", "Src_City", "Src_Time_Zone",
-        "Src_Service"):
+        "No.", "Time", "Source", "Destination", "Protocol", "Length", "Src_Country", "Src_City", "Src_Time_Zone", "Src_Service"):
             self.tree.heading(col, text=col)
         column_widths = {"No.": 50, "Time": 150, "Source": 100, "Destination": 100, "Protocol": 80, "Length": 80,
                          "Src_Country": 100, "Src_City": 100, "Src_Time_Zone": 100, "Src_Service": 100}
@@ -250,50 +244,6 @@ class WiresharkApp:
                 source_geo.time_zone,
                 source_geo.isp
             ))
-
-    def open_file(self):
-        file_path = filedialog.askopenfilename(filetypes=[("PCAP Files", "*.pcap"), ("All Files", "*.*")])
-        if file_path:
-            self.packet_list.clear()  # Dùng clear() thay vì gán lại
-            self.capture = pyshark.FileCapture(file_path)
-            for packet in self.capture:
-                self.packet_list.append(packet)
-                self.display_packet(packet)
-
-    def save_to_csv(self):
-        file_path = filedialog.asksaveasfilename(defaultextension=".csv",
-                                                 filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
-        if file_path:
-            with open(file_path, mode='w', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerow(
-                    ["No.", "Time", "Source", "Destination", "Protocol", "Length", "Src_Country", "Src_City",
-                     "Src_Time_Zone", "Src_Service"])
-                for idx, packet in enumerate(self.packet_list, start=1):
-                    if 'ip' in packet:
-                        source_ip = packet.ip.src
-                        dest_ip = packet.ip.dst
-                        source_geo = IPGeolocation(source_ip)
-                        writer.writerow([
-                            idx,
-                            packet.sniff_time.strftime('%Y-%m-%d %H:%M:%S'),
-                            source_ip,
-                            dest_ip,
-                            packet.transport_layer,
-                            packet.length,
-                            source_geo.country,
-                            source_geo.city,
-                            source_geo.time_zone,
-                            source_geo.isp
-                        ])
-            messagebox.showinfo("Save to CSV", "Data saved successfully!")
-
-    def export_to_csv(self):
-        self.save_to_csv()
-
-    def show_help_message(self):
-        messagebox.showinfo("Liên hệ", "Help")
-
     def display_packet_details(self, event):
         item = self.tree.selection()
         if item:
@@ -302,26 +252,10 @@ class WiresharkApp:
             self.log.delete(1.0, tk.END)
             self.log.insert(tk.END, str(packet))
 
-    def save_to_pcap(self):
-        file_path = filedialog.asksaveasfilename(defaultextension=".pcap",
-                                                 filetypes=[("PCAP Files", "*.pcap"), ("All Files", "*.*")])
-        if file_path:
-            scapy_packets = []
-            for packet in self.packet_list:
-                if 'ip' in packet:
-                    ip_packet = IP(src=packet.ip.src, dst=packet.ip.dst)
-                    if 'eth' in packet:
-                        ether_packet = Ether(src=packet.eth.src, dst=packet.eth.dst)
-                        scapy_packets.append(ether_packet / ip_packet)
-                    else:
-                        scapy_packets.append(ip_packet)
-            wrpcap(file_path, scapy_packets)
-            messagebox.showinfo("Save to PCAP", "PCAP file saved successfully!")
 
 def main():
     root = tk.Tk()
     app = WiresharkApp(root)
     root.mainloop()
-
 if __name__ == "__main__":
     main()
