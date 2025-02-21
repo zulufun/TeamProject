@@ -292,7 +292,7 @@ class WiresharkApp:
         self.save_to_csv()
 
     def show_help_message(self):
-        messagebox.showinfo("Liên hệ", "Help")
+        messagebox.showinfo("Liên hệ", "Flow Link \nGithub : https://github.com/zulufun/App_WireShark")
 
     def display_packet_details(self, event):
         item = self.tree.selection()
@@ -318,10 +318,12 @@ class WiresharkApp:
             wrpcap(file_path, scapy_packets)
             messagebox.showinfo("Save to PCAP", "PCAP file saved successfully!")
 
+
 def main():
     root = tk.Tk()
     app = WiresharkApp(root)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
