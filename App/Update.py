@@ -227,23 +227,6 @@ class WiresharkApp:
             self.display_packet(packet)
         loop.close()
 
-    # def display_packet(self, packet):
-    #     if 'ip' in packet:
-    #         source_ip = packet.ip.src
-    #         dest_ip = packet.ip.dst
-    #         source_geo = IPGeolocation(source_ip)
-    #         self.tree.insert("", "end", values=(
-    #             len(self.packet_list),
-    #             packet.sniff_time.strftime('%Y-%m-%d %H:%M:%S'),
-    #             source_ip,
-    #             dest_ip,
-    #             packet.transport_layer,
-    #             packet.length,
-    #             source_geo.country,
-    #             source_geo.city,
-    #             source_geo.time_zone,
-    #             source_geo.isp
-    #         ))
     def display_packet(self, packet):
         if 'ip' in packet:
             source_ip = packet.ip.src
