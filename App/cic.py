@@ -1,341 +1,300 @@
-import time
-import statistics
-from collections import defaultdict
-import ipaddress
-from scapy.all import IP, TCP, UDP
+import tkinter as tk
+from tkinter import scrolledtext, filedialog, ttk, messagebox
+import pyshark
+import threading
+import csv
+import asyncio
+import psutil
+from scapy.all import wrpcap
+from scapy.layers.inet import IP
+from scapy.layers.l2 import Ether
+
+# Import your existing features
+import log_feature
+import speed_test
+import LAN_device
+from ip_geolocation import IPGeolocation
+from stats_generator import StatsGenerator
+import file_manager
+
+# Import the flow analyzer integration
+from flow_analyzer_integration import FlowAnalyzerTab
 
 
-class FlowRecord:
-    """Class to store and analyze network flow information"""
+class WiresharkApp:
+    def __init__(self, master):
+        self.master = master
+        master.title("Enhanced Wireshark App")
+        # Initialize important variables
+        self.packet_list = []
+        self.filtered_packets = []
+        self.capture = None
+        self.capture_thread = None
+        self.running = False
 
-    def __init__(self, src_ip, dst_ip, src_port=None, dst_port=None, protocol=None):
-        # Flow identification
-        self.src_ip = src_ip
-        self.dst_ip = dst_ip
-        self.src_port = src_port
-        self.dst_port = dst_port
-        self.protocol = protocol
+        # ----------------- Menu -----------------
+        self.menu = tk.Menu(master)
+        master.config(menu=self.menu)
 
-        # Flow timestamps
-        self.start_time = time.time()
-        self.last_time = self.start_time
-        self.flow_duration = 0
+        # File Menu
+        self.file_menu = tk.Menu(self.menu, tearoff=False)
+        self.menu.add_cascade(label="File", menu=self.file_menu)
+        self.file_menu.add_command(label="Open", command=lambda: file_manager.open_file(self))
+        self.file_menu.add_command(label="Save to PCAP", command=lambda: file_manager.save_to_pcap(self))
+        self.file_menu.add_command(label="Save to CSV", command=lambda: file_manager.save_to_csv(self))
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="Exit", command=master.quit)
 
-        # Packet counters
-        self.fwd_packets = 0  # Source to destination
-        self.bwd_packets = 0  # Destination to source
-        self.total_packets = 0
+        # Extra Menu
+        self.extra_menu = tk.Menu(self.menu, tearoff=False)
+        self.menu.add_cascade(label="Extra", menu=self.extra_menu)
+        self.extra_menu.add_command(label="Log_analyze", command=lambda: log_feature.extra_future(self.master))
+        self.extra_menu.add_command(label="Speed_test",
+                                    command=lambda: speed_test.open_network_speed_test_window(self.master))
+        self.extra_menu.add_command(label="Theo dõi mạng LAN",
+                                    command=lambda: LAN_device.open_detailed_network_monitor_window(self.master))
 
-        # Byte counters
-        self.fwd_bytes = 0
-        self.bwd_bytes = 0
-        self.total_bytes = 0
+        # Stats Menu
+        self.stats_menu = tk.Menu(self.menu, tearoff=False)
+        self.menu.add_cascade(label="Stats", menu=self.stats_menu)
+        self.stats_gen = StatsGenerator(master=master, packet_list=self.packet_list)
+        self.stats_menu.add_command(label="Source Country Distribution",
+                                    command=self.stats_gen.show_source_country_stats)
+        self.stats_menu.add_command(label="Source Service Distribution",
+                                    command=self.stats_gen.show_source_service_stats)
 
-        # Packet length statistics
-        self.packet_lengths = []
-        self.fwd_packet_lengths = []
-        self.bwd_packet_lengths = []
+        # ----------------- Notebook/Tabs -----------------
+        self.notebook = ttk.Notebook(master)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Inter-arrival time statistics
-        self.flow_iat = []  # Inter-arrival times
-        self.fwd_iat = []  # Forward inter-arrival times
-        self.bwd_iat = []  # Backward inter-arrival times
+        # Packet capture tab
+        self.packet_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.packet_tab, text="Packet Capture")
 
-        # TCP flags (for TCP flows)
-        self.fwd_syn_flags = 0
-        self.bwd_syn_flags = 0
-        self.fwd_fin_flags = 0
-        self.bwd_fin_flags = 0
-        self.fwd_rst_flags = 0
-        self.bwd_rst_flags = 0
-        self.fwd_psh_flags = 0
-        self.bwd_psh_flags = 0
-        self.fwd_ack_flags = 0
-        self.bwd_ack_flags = 0
-        self.fwd_urg_flags = 0
-        self.bwd_urg_flags = 0
+        # Flow analysis tab
+        self.flow_analyzer = FlowAnalyzerTab(self.notebook, self)
 
-        # Active/Inactive times
-        self.last_active_time = self.start_time
-        self.active_times = []
-        self.inactive_times = []
-        self.active_threshold = 5.0  # 5 seconds of inactivity defines a new burst
+        # ----------------- Interface Frame (in Packet Tab) -----------------
+        self.interface_frame = tk.Frame(self.packet_tab)
+        self.interface_frame.pack(pady=10)
 
-        # Flow state
-        self.is_active = True
+        self.label = tk.Label(self.interface_frame, text="Select interface:")
+        self.label.grid(row=0, column=0, padx=5)
 
-    def update_with_packet(self, packet, direction="forward"):
-        """Update flow statistics with a new packet"""
-        current_time = float(packet.sniff_time.timestamp())
-        packet_length = int(packet.length)
-        is_forward = (direction == "forward")
+        self.interface_combobox = ttk.Combobox(self.interface_frame)
+        self.interface_combobox.grid(row=0, column=1, padx=5)
+        self.populate_interfaces()
 
-        # Update timestamp information
-        if self.total_packets > 0:
-            iat = current_time - self.last_time
-            self.flow_iat.append(iat)
+        self.start_button = tk.Button(self.interface_frame, text="Start", command=self.start_capture)
+        self.start_button.grid(row=0, column=2, padx=5)
+        self.stop_button = tk.Button(self.interface_frame, text="Stop", command=self.stop_capture, state=tk.DISABLED)
+        self.stop_button.grid(row=0, column=3, padx=5)
+        self.continue_button = tk.Button(self.interface_frame, text="Continue", command=self.continue_capture,
+                                         state=tk.DISABLED)
+        self.continue_button.grid(row=0, column=4, padx=5)
+        self.export_button = tk.Button(self.interface_frame, text="Export to CSV",
+                                       command=lambda: file_manager.export_to_csv(self),
+                                       state=tk.DISABLED)
+        self.export_button.grid(row=0, column=5, padx=5)
 
-            if is_forward:
-                self.fwd_iat.append(iat)
-            else:
-                self.bwd_iat.append(iat)
+        # ----------------- Filter Section -----------------
+        self.filter_frame = tk.Frame(self.packet_tab)
+        self.filter_frame.pack(pady=10)
 
-            # Check if we need to update active/inactive times
-            if iat > self.active_threshold:
-                self.inactive_times.append(iat)
-                self.active_times.append(current_time - self.last_active_time)
-                self.last_active_time = current_time
+        self.filter_field_label = tk.Label(self.filter_frame, text="Filter Field:")
+        self.filter_field_label.grid(row=0, column=0, padx=5)
 
-        self.last_time = current_time
-        self.flow_duration = self.last_time - self.start_time
+        self.filter_field_combobox = ttk.Combobox(self.filter_frame, values=["Source IP", "Destination IP", "Protocol"])
+        self.filter_field_combobox.grid(row=0, column=1, padx=5)
 
-        # Update packet and byte counters
-        self.total_packets += 1
-        self.total_bytes += packet_length
-        self.packet_lengths.append(packet_length)
+        self.filter_entry_label = tk.Label(self.filter_frame, text="Filter Text:")
+        self.filter_entry_label.grid(row=0, column=2, padx=5)
 
-        if is_forward:
-            self.fwd_packets += 1
-            self.fwd_bytes += packet_length
-            self.fwd_packet_lengths.append(packet_length)
-        else:
-            self.bwd_packets += 1
-            self.bwd_bytes += packet_length
-            self.bwd_packet_lengths.append(packet_length)
+        self.filter_entry = tk.Entry(self.filter_frame)
+        self.filter_entry.grid(row=0, column=3, padx=5)
 
-        # Update TCP flags if applicable
-        if hasattr(packet, 'tcp'):
-            flags = int(packet.tcp.flags, 16)
+        self.filter_button = tk.Button(self.filter_frame, text="Filter", command=self.start_filter_thread)
+        self.filter_button.grid(row=0, column=4, padx=5)
 
-            if is_forward:
-                if flags & 0x02:  # SYN flag
-                    self.fwd_syn_flags += 1
-                if flags & 0x01:  # FIN flag
-                    self.fwd_fin_flags += 1
-                if flags & 0x04:  # RST flag
-                    self.fwd_rst_flags += 1
-                if flags & 0x08:  # PSH flag
-                    self.fwd_psh_flags += 1
-                if flags & 0x10:  # ACK flag
-                    self.fwd_ack_flags += 1
-                if flags & 0x20:  # URG flag
-                    self.fwd_urg_flags += 1
-            else:
-                if flags & 0x02:  # SYN flag
-                    self.bwd_syn_flags += 1
-                if flags & 0x01:  # FIN flag
-                    self.bwd_fin_flags += 1
-                if flags & 0x04:  # RST flag
-                    self.bwd_rst_flags += 1
-                if flags & 0x08:  # PSH flag
-                    self.bwd_psh_flags += 1
-                if flags & 0x10:  # ACK flag
-                    self.bwd_ack_flags += 1
-                if flags & 0x20:  # URG flag
-                    self.bwd_urg_flags += 1
+        # ----------------- Treeview for Displaying Packets -----------------
+        self.tree = ttk.Treeview(self.packet_tab, columns=(
+            "No.", "Time", "Source", "Destination", "Protocol", "Length", "Src_Country", "Src_City", "Src_Time_Zone",
+            "Src_Service"), show="headings")
+        for col in (
+                "No.", "Time", "Source", "Destination", "Protocol", "Length", "Src_Country", "Src_City",
+                "Src_Time_Zone", "Src_Service"):
+            self.tree.heading(col, text=col)
+        column_widths = {"No.": 50, "Time": 150, "Source": 100, "Destination": 100, "Protocol": 80, "Length": 80,
+                         "Src_Country": 100, "Src_City": 100, "Src_Time_Zone": 100, "Src_Service": 100}
+        for col, width in column_widths.items():
+            self.tree.column(col, width=width, anchor=tk.CENTER)
+        self.tree.bind("<ButtonRelease-1>", self.display_packet_details)
+        self.tree.pack(fill=tk.BOTH, expand=True)
 
-    def get_stats(self):
-        """Return statistical information about the flow"""
-        stats = {
-            # Flow identification
-            'src_ip': self.src_ip,
-            'dst_ip': self.dst_ip,
-            'src_port': self.src_port,
-            'dst_port': self.dst_port,
-            'protocol': self.protocol,
+        # ----------------- Scrollbar for Treeview -----------------
+        self.scrollbar = ttk.Scrollbar(self.packet_tab, orient="vertical", command=self.tree.yview)
+        self.scrollbar.pack(side="right", fill="y")
+        self.tree.configure(yscrollcommand=self.scrollbar.set)
 
-            # Basic flow metrics
-            'flow_duration': self.flow_duration,
-            'total_packets': self.total_packets,
-            'total_bytes': self.total_bytes,
-            'fwd_packets': self.fwd_packets,
-            'bwd_packets': self.bwd_packets,
-            'fwd_bytes': self.fwd_bytes,
-            'bwd_bytes': self.bwd_bytes,
+        # ----------------- Log ScrolledText Widget -----------------
+        self.log = scrolledtext.ScrolledText(self.packet_tab, width=60, height=10)
+        self.log.pack(fill=tk.BOTH, expand=True)
 
-            # Derived metrics
-            'flow_bytes_per_sec': self.total_bytes / max(self.flow_duration, 0.001),
-            'flow_packets_per_sec': self.total_packets / max(self.flow_duration, 0.001),
-        }
+    def populate_interfaces(self):
+        try:
+            interfaces = psutil.net_if_addrs()
+            interface_names = [f"{name} ({addrs[0].address})" for name, addrs in interfaces.items()]
+            self.interface_combobox['values'] = interface_names
+            if interface_names:
+                self.interface_combobox.current(0)
+        except Exception as e:
+            print(f"Error populating interfaces: {e}")
 
-        # Add packet length statistics if available
-        if self.packet_lengths:
-            stats.update({
-                'packet_length_min': min(self.packet_lengths),
-                'packet_length_max': max(self.packet_lengths),
-                'packet_length_mean': statistics.mean(self.packet_lengths),
-                'packet_length_std': statistics.stdev(self.packet_lengths) if len(self.packet_lengths) > 1 else 0,
-            })
+    def start_filter_thread(self):
+        filter_field = self.filter_field_combobox.get()
+        filter_text = self.filter_entry.get()
+        self.filter_thread = threading.Thread(target=self.filter_packets, args=(filter_field, filter_text))
+        self.filter_thread.start()
 
-        # Add forward packet length statistics if available
-        if self.fwd_packet_lengths:
-            stats.update({
-                'fwd_packet_length_min': min(self.fwd_packet_lengths),
-                'fwd_packet_length_max': max(self.fwd_packet_lengths),
-                'fwd_packet_length_mean': statistics.mean(self.fwd_packet_lengths),
-                'fwd_packet_length_std': statistics.stdev(self.fwd_packet_lengths) if len(
-                    self.fwd_packet_lengths) > 1 else 0,
-            })
+    def filter_packets(self, filter_field, filter_text):
+        self.filtered_packets = []
+        for packet in self.packet_list:
+            if filter_field == "Source IP":
+                if hasattr(packet, 'ip') and packet.ip.src == filter_text:
+                    self.filtered_packets.append(packet)
+            elif filter_field == "Destination IP":
+                if hasattr(packet, 'ip') and packet.ip.dst == filter_text:
+                    self.filtered_packets.append(packet)
+            elif filter_field == "Protocol" and hasattr(packet,
+                                                        'transport_layer') and packet.transport_layer == filter_text:
+                self.filtered_packets.append(packet)
+        self.display_packets(self.filtered_packets)
 
-        # Add backward packet length statistics if available
-        if self.bwd_packet_lengths:
-            stats.update({
-                'bwd_packet_length_min': min(self.bwd_packet_lengths),
-                'bwd_packet_length_max': max(self.bwd_packet_lengths),
-                'bwd_packet_length_mean': statistics.mean(self.bwd_packet_lengths),
-                'bwd_packet_length_std': statistics.stdev(self.bwd_packet_lengths) if len(
-                    self.bwd_packet_lengths) > 1 else 0,
-            })
+    def display_packets(self, packets):
+        self.tree.delete(*self.tree.get_children())
+        for idx, packet in enumerate(packets, start=1):
+            if 'ip' in packet:
+                source_ip = packet.ip.src
+                dest_ip = packet.ip.dst
+                source_geo = IPGeolocation(source_ip)
+                self.tree.insert("", "end", values=(
+                    idx,
+                    packet.sniff_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    source_ip,
+                    dest_ip,
+                    packet.transport_layer,
+                    packet.length,
+                    source_geo.country,
+                    source_geo.city,
+                    source_geo.time_zone,
+                    source_geo.isp
+                ))
 
-        # Add flow IAT statistics if available
-        if self.flow_iat:
-            stats.update({
-                'flow_iat_min': min(self.flow_iat),
-                'flow_iat_max': max(self.flow_iat),
-                'flow_iat_mean': statistics.mean(self.flow_iat),
-                'flow_iat_std': statistics.stdev(self.flow_iat) if len(self.flow_iat) > 1 else 0,
-            })
+    def start_capture(self):
+        if not self.running:
+            self.packet_list.clear()
+            interface = self.interface_combobox.get().split()[0]
+            self.capture_thread = threading.Thread(target=self.capture_packets, args=(interface,))
+            self.capture_thread.start()
+            self.running = True
+            self.start_button.config(state=tk.DISABLED)
+            self.stop_button.config(state=tk.NORMAL)
+            self.continue_button.config(state=tk.DISABLED)
+            self.export_button.config(state=tk.NORMAL)
 
-        # Add forward IAT statistics if available
-        if self.fwd_iat:
-            stats.update({
-                'fwd_iat_min': min(self.fwd_iat),
-                'fwd_iat_max': max(self.fwd_iat),
-                'fwd_iat_mean': statistics.mean(self.fwd_iat),
-                'fwd_iat_std': statistics.stdev(self.fwd_iat) if len(self.fwd_iat) > 1 else 0,
-                'fwd_iat_total': sum(self.fwd_iat),
-            })
+    def stop_capture(self):
+        if self.running:
+            self.running = False
+            if self.capture:
+                self.capture.close()
+            self.log.insert(tk.END, "Capture stopped\n")
+            self.start_button.config(state=tk.NORMAL)
+            self.stop_button.config(state=tk.DISABLED)
+            self.continue_button.config(state=tk.NORMAL)
+            self.export_button.config(state=tk.NORMAL)
 
-        # Add backward IAT statistics if available
-        if self.bwd_iat:
-            stats.update({
-                'bwd_iat_min': min(self.bwd_iat),
-                'bwd_iat_max': max(self.bwd_iat),
-                'bwd_iat_mean': statistics.mean(self.bwd_iat),
-                'bwd_iat_std': statistics.stdev(self.bwd_iat) if len(self.bwd_iat) > 1 else 0,
-                'bwd_iat_total': sum(self.bwd_iat),
-            })
+            # Update flow data when capture stops
+            self.flow_analyzer.refresh_flows()
 
-        # Add TCP flags information
-        if self.protocol == 'TCP':
-            stats.update({
-                'fwd_syn_flags': self.fwd_syn_flags,
-                'bwd_syn_flags': self.bwd_syn_flags,
-                'fwd_fin_flags': self.fwd_fin_flags,
-                'bwd_fin_flags': self.bwd_fin_flags,
-                'fwd_rst_flags': self.fwd_rst_flags,
-                'bwd_rst_flags': self.bwd_rst_flags,
-                'fwd_psh_flags': self.fwd_psh_flags,
-                'bwd_psh_flags': self.bwd_psh_flags,
-                'fwd_ack_flags': self.fwd_ack_flags,
-                'bwd_ack_flags': self.bwd_ack_flags,
-                'fwd_urg_flags': self.fwd_urg_flags,
-                'bwd_urg_flags': self.bwd_urg_flags,
-            })
+    def continue_capture(self):
+        if not self.running:
+            interface = self.interface_combobox.get().split()[0]
+            self.capture_thread = threading.Thread(target=self.capture_packets, args=(interface,))
+            self.capture_thread.start()
+            self.running = True
+            self.start_button.config(state=tk.DISABLED)
+            self.stop_button.config(state=tk.NORMAL)
+            self.continue_button.config(state=tk.DISABLED)
+            self.export_button.config(state=tk.NORMAL)
 
-        # Add active/inactive time statistics if available
-        if self.active_times:
-            stats.update({
-                'active_min': min(self.active_times),
-                'active_max': max(self.active_times),
-                'active_mean': statistics.mean(self.active_times),
-                'active_std': statistics.stdev(self.active_times) if len(self.active_times) > 1 else 0,
-            })
+    def capture_packets(self, interface):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self.capture = pyshark.LiveCapture(interface=interface)
+        for packet in self.capture.sniff_continuously():
+            if not self.running:
+                break
+            self.packet_list.append(packet)
+            self.display_packet(packet)
 
-        if self.inactive_times:
-            stats.update({
-                'inactive_min': min(self.inactive_times),
-                'inactive_max': max(self.inactive_times),
-                'inactive_mean': statistics.mean(self.inactive_times),
-                'inactive_std': statistics.stdev(self.inactive_times) if len(self.inactive_times) > 1 else 0,
-            })
+            # Process packet for flow analysis
+            self.flow_analyzer.process_packet(packet)
 
-        return stats
+        loop.close()
 
-
-class FlowManager:
-    """Manages multiple network flows and their lifecycle"""
-
-    def __init__(self, flow_timeout=120, activity_timeout=5):
-        self.flows = {}  # Dictionary to store active flows
-        self.completed_flows = []  # List to store completed flows
-        self.flow_timeout = flow_timeout  # Time to keep inactive flows (seconds)
-        self.activity_timeout = activity_timeout  # Time to consider a flow inactive
-
-    def get_flow_key(self, packet):
-        """Generate a unique key for a flow based on packet information"""
+    def display_packet(self, packet):
         if 'ip' in packet:
-            src_ip = packet.ip.src
-            dst_ip = packet.ip.dst
+            source_ip = packet.ip.src
+            dest_ip = packet.ip.dst
+            # Insert row into Treeview with initial IP fields as "Loading"
+            row_id = self.tree.insert("", "end", values=(
+                len(self.packet_list),
+                packet.sniff_time.strftime('%Y-%m-%d %H:%M:%S'),
+                source_ip,
+                dest_ip,
+                packet.transport_layer,
+                packet.length,
+                "Loading",  # Country
+                "Loading",  # City
+                "Loading",  # Time Zone
+                "Loading"  # ISP
+            ))
 
-            # Determine protocol and ports
-            if hasattr(packet, 'tcp'):
-                protocol = 'TCP'
-                src_port = int(packet.tcp.srcport)
-                dst_port = int(packet.tcp.dstport)
-            elif hasattr(packet, 'udp'):
-                protocol = 'UDP'
-                src_port = int(packet.udp.srcport)
-                dst_port = int(packet.udp.dstport)
-            else:
-                protocol = 'OTHER'
-                src_port = 0
-                dst_port = 0
+            # Define callback to update row when IP info is returned
+            def update_geo(ip_geo):
+                # Check if row still exists before updating
+                if self.tree.exists(row_id):
+                    # Use after() to ensure update on main thread
+                    self.master.after(0, lambda: self.tree.item(row_id, values=(
+                        self.tree.item(row_id, "values")[0],  # Number unchanged
+                        self.tree.item(row_id, "values")[1],  # Time unchanged
+                        source_ip,
+                        dest_ip,
+                        packet.transport_layer,
+                        packet.length,
+                        ip_geo.country,
+                        ip_geo.city,
+                        ip_geo.time_zone,
+                        ip_geo.isp
+                    )))
 
-            # Create a bi-directional flow key (smaller IP address first)
-            if ipaddress.ip_address(src_ip) < ipaddress.ip_address(dst_ip):
-                flow_key = (src_ip, dst_ip, src_port, dst_port, protocol)
-                direction = "forward"
-            else:
-                flow_key = (dst_ip, src_ip, dst_port, src_port, protocol)
-                direction = "backward"
+            # Create IPGeolocation object with callback
+            _ = IPGeolocation(source_ip, callback=update_geo)
 
-            return flow_key, direction
+    def display_packet_details(self, event):
+        item = self.tree.selection()
+        if item:
+            item = item[0]
+            packet = self.packet_list[int(self.tree.item(item, "values")[0]) - 1]
+            self.log.delete(1.0, tk.END)
+            self.log.insert(tk.END, str(packet))
 
-        return None, None
 
-    def process_packet(self, packet):
-        """Process a packet and update the corresponding flow"""
-        flow_key, direction = self.get_flow_key(packet)
+def main():
+    root = tk.Tk()
+    app = WiresharkApp(root)
+    root.mainloop()
 
-        if flow_key is None:
-            return None
 
-        if flow_key not in self.flows:
-            # Create a new flow record
-            src_ip, dst_ip, src_port, dst_port, protocol = flow_key
-            flow = FlowRecord(src_ip, dst_ip, src_port, dst_port, protocol)
-            self.flows[flow_key] = flow
-        else:
-            flow = self.flows[flow_key]
-
-        # Update flow with the new packet
-        flow.update_with_packet(packet, direction)
-
-        return flow
-
-    def check_timeouts(self, current_time=None):
-        """Check for timed-out flows and move them to completed flows"""
-        if current_time is None:
-            current_time = time.time()
-
-        timed_out_keys = []
-        for key, flow in self.flows.items():
-            # Check if flow has timed out
-            if current_time - flow.last_time > self.flow_timeout:
-                timed_out_keys.append(key)
-
-        # Move timed-out flows to completed flows
-        for key in timed_out_keys:
-            self.completed_flows.append(self.flows[key])
-            del self.flows[key]
-
-    def get_all_flows(self):
-        """Return all active and completed flows"""
-        all_flows = self.completed_flows.copy()
-        all_flows.extend(list(self.flows.values()))
-        return all_flows
-
-    def get_flow_stats(self):
-        """Return statistics for all flows"""
-        return [flow.get_stats() for flow in self.get_all_flows()]
+if __name__ == "__main__":
+    main()
