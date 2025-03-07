@@ -60,7 +60,7 @@ class Flow:
         return 0
     
     def to_feature_vector(self):
-        """Convert flow to feature vector for ML model"""
+        """Convert flow to feature vector for ML model with all integers"""
         # Directly use numeric representation for protocol
         protocol_num = 0  # Default for other protocols
         if self.protocol == 'TCP':
@@ -68,12 +68,15 @@ class Flow:
         elif self.protocol == 'UDP':
             protocol_num = 17
             
+        # Convert flow duration to integer (milliseconds)
+        duration_ms = int(self.flow_duration * 1000)
+            
         return [
-            self.dst_port,
-            protocol_num,  # Keep protocol as numeric value for the model
-            self.flow_duration,
-            self.fwd_packets,
-            self.bwd_packets
+            int(self.dst_port),  # Ensure port is integer
+            int(protocol_num),   # Protocol as integer
+            duration_ms,         # Duration in milliseconds as integer
+            int(self.fwd_packets),  # Forward packets as integer
+            int(self.bwd_packets)   # Backward packets as integer
         ]
     
     def to_dict(self):
