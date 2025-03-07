@@ -57,7 +57,7 @@ class Flow:
     def flow_duration(self):
         """Calculate flow duration in microseconds"""
         if self.start_time and self.last_time:
-            return (self.last_time - self.start_time).total_seconds() * 1000000  # Convert to microseconds
+            return (self.last_time - self.start_time).total_seconds() * 1000  # Convert to microseconds
         return 0
     
     def to_feature_vector(self):
@@ -88,7 +88,8 @@ class Flow:
             'Dst Port': self.dst_port,
             'Protocol': self.protocol,  # Keep as string for display
             'Interface': self.interface if self.interface else "Unknown",
-            'Flow Duration': f"{self.flow_duration:.0f}μs",  # Display as microseconds with μs symbol
+            # 'Flow Duration': f"{self.flow_duration:.0f}μs",  # Display as microseconds with μs symbol
+            'Flow Duration': f"{self.flow_duration:.0f}ms",
             'Tot Fwd Pkts': self.fwd_packets,
             'Tot Bwd Pkts': self.bwd_packets,
             'Label': self.label
