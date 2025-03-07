@@ -108,9 +108,21 @@ class PacketAnalyzer:
         self.capture_threads = []
         
     def get_all_interfaces(self):
-        """Get a list of all available network interfaces"""
-        # Use Scapy's conf.ifaces to get all interfaces
-        return list(scapy_conf.ifaces.keys())
+        """Get a list of all available network interfaces with friendly names"""
+        interfaces = []
+        for iface_name, iface_data in scapy_conf.ifaces.items():
+            # Sử dụng thuộc tính name của iface_data thay vì sử dụng iface_name trực tiếp
+            actual_iface_name = iface_data.name if hasattr(iface_data, 'name') else iface_name
+            
+            # Tạo tên hiển thị thân thiện
+            friendly_name = str(iface_data.description if hasattr(iface_data, 'description') and iface_data.description else iface_name)
+            friendly_name = friendly_name.replace('{', '').replace('}', '')
+            
+            display_name = f"{friendly_name}"
+            
+            # Lưu trữ cả tên hiển thị và tên interface thực sự (không phải GUID)
+            interfaces.append((display_name, actual_iface_name))
+        return interfaces
         
     def load_model(self):
         """Load the ML model from model.pkl file"""
@@ -157,7 +169,7 @@ class PacketAnalyzer:
             )
             capture_thread.start()
             self.capture_threads.append(capture_thread)
-    
+        
     def stop_capture(self):
         """Stop packet capture"""
         self.is_capturing = False
@@ -167,10 +179,20 @@ class PacketAnalyzer:
     def _capture_packets(self, interface):
         """Capture packets using Scapy for a specific interface"""
         try:
-            print(f"Started capturing on interface: {interface}")
-            sniff(iface=interface, prn=lambda pkt: self._packet_callback(pkt, interface), 
-                  store=False, stop_filter=lambda p: not self.is_capturing)
-            print(f"Stopped capturing on interface: {interface}")
+            # Tìm tên hiển thị cho interface này
+            interface_display = None
+            for iface_data in scapy_conf.ifaces.values():
+                if iface_data.name == interface:
+                    interface_display = str(iface_data.description if hasattr(iface_data, 'description') else interface)
+                    break
+            
+            if not interface_display:
+                interface_display = interface
+                
+            print(f"Started capturing on interface: {interface_display}")
+            sniff(iface=interface, prn=lambda pkt: self._packet_callback(pkt, interface_display), 
+                store=False, stop_filter=lambda p: not self.is_capturing)
+            print(f"Stopped capturing on interface: {interface_display}")
         except Exception as e:
             print(f"Error in packet capture on interface {interface}: {e}")
     
@@ -284,13 +306,15 @@ class NetworkAnalyzerGUI:
         self.interface_var = tk.StringVar(value="all")
         
         # Get all available interfaces
-        interfaces = ["all"] + self.analyzer.get_all_interfaces()
+        interfaces_data = self.analyzer.get_all_interfaces()
+        self.interface_map = dict(interfaces_data)  # Lưu mapping giữa tên hiển thị và tên gốc
+        interface_display_names = ["all"] + [display_name for display_name, _ in interfaces_data]
         
         self.interface_dropdown = ttk.Combobox(
             control_frame, 
             textvariable=self.interface_var,
-            values=interfaces,
-            width=20
+            values=interface_display_names,
+            width=40  # Tăng độ rộng để hiển thị đủ thông tin
         )
         self.interface_dropdown.pack(side=tk.LEFT, padx=5)
         
@@ -315,7 +339,7 @@ class NetworkAnalyzerGUI:
         # Configure column headings
         for col in columns:
             self.tree.heading(col, text=col)
-            width = 150 if 'IP' in col else 100  # Make IP columns wider
+            width = 150 if 'IP' in col else 120 if col == 'Interface' else 100  # Make IP and Interface columns wider
             self.tree.column(col, width=width, anchor=tk.CENTER)
         
         # Add scrollbars
@@ -337,16 +361,19 @@ class NetworkAnalyzerGUI:
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
     
+# Trong lớp NetworkAnalyzerGUI
     def start_capture(self):
         """Start packet capture"""
-        selected_interface = self.interface_var.get()
+        selected_interface_display = self.interface_var.get()
         
-        if selected_interface == "all":
+        if selected_interface_display == "all":
             self.analyzer.interfaces = "all"
             self.status_var.set("Capturing packets on all interfaces...")
         else:
-            self.analyzer.interfaces = [selected_interface]
-            self.status_var.set(f"Capturing packets on interface: {selected_interface}")
+            # Lấy tên gốc của interface từ mapping
+            selected_interface_raw = self.interface_map.get(selected_interface_display)
+            self.analyzer.interfaces = [selected_interface_raw]
+            self.status_var.set(f"Capturing packets on interface: {selected_interface_display}")
         
         self.analyzer.start_capture()
         self.start_button.config(state=tk.DISABLED)
@@ -354,7 +381,7 @@ class NetworkAnalyzerGUI:
         
         # Update model status periodically
         self.check_model_status()
-    
+        
     def check_model_status(self):
         """Check and update the model loading status"""
         if self.analyzer.model_loaded:
