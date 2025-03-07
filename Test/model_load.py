@@ -55,9 +55,9 @@ class Flow:
         
     @property
     def flow_duration(self):
-        """Calculate flow duration in seconds"""
+        """Calculate flow duration in microseconds"""
         if self.start_time and self.last_time:
-            return (self.last_time - self.start_time).total_seconds()
+            return (self.last_time - self.start_time).total_seconds() * 1000  # Convert to microseconds
         return 0
     
     def to_feature_vector(self):
@@ -69,13 +69,13 @@ class Flow:
         elif self.protocol == 'UDP':
             protocol_num = 17
             
-        # Convert flow duration to integer (milliseconds)
-        duration_ms = int(self.flow_duration * 1000)
+        # Convert flow duration to integer (microseconds)
+        duration_us = int(self.flow_duration)  # Already in microseconds
             
         return [
             int(self.dst_port),        # Ensure port is integer
             int(protocol_num),         # Protocol as integer
-            duration_ms,               # Duration in milliseconds as integer
+            duration_us,               # Duration in microseconds as integer
             int(self.fwd_packets),     # Forward packets as integer
             int(self.bwd_packets)      # Backward packets as integer
         ]
@@ -88,7 +88,7 @@ class Flow:
             'Dst Port': self.dst_port,
             'Protocol': self.protocol,  # Keep as string for display
             'Interface': self.interface if self.interface else "Unknown",
-            'Flow Duration': f"{self.flow_duration:.4f}s",
+            'Flow Duration': f"{self.flow_duration:.0f}μs",  # Display as microseconds with μs symbol
             'Tot Fwd Pkts': self.fwd_packets,
             'Tot Bwd Pkts': self.bwd_packets,
             'Label': self.label
