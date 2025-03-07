@@ -6,7 +6,7 @@ import queue
 import pandas as pd
 import asyncio
 import nest_asyncio
-from scapy.all import sniff, IP, TCP, UDP
+from scapy.all import sniff, IP, TCP, UDP, conf as scapy_conf
 import joblib
 import numpy as np
 from datetime import datetime
@@ -40,7 +40,7 @@ class FlowKey:
 
 class Flow:
     """Class representing a network flow with features"""
-    def __init__(self, key):
+    def __init__(self, key, interface=None):
         self.key = key
         self.start_time = None
         self.last_time = None
@@ -50,6 +50,7 @@ class Flow:
         self.dst_port = key.dst_port
         self.src_ip = key.src_ip
         self.dst_ip = key.dst_ip
+        self.interface = interface  # Add interface information
         self.label = "Loading..."
         
     @property
@@ -72,11 +73,11 @@ class Flow:
         duration_ms = int(self.flow_duration * 1000)
             
         return [
-            int(self.dst_port),  # Ensure port is integer
-            int(protocol_num),   # Protocol as integer
-            duration_ms,         # Duration in milliseconds as integer
-            int(self.fwd_packets),  # Forward packets as integer
-            int(self.bwd_packets)   # Backward packets as integer
+            int(self.dst_port),        # Ensure port is integer
+            int(protocol_num),         # Protocol as integer
+            duration_ms,               # Duration in milliseconds as integer
+            int(self.fwd_packets),     # Forward packets as integer
+            int(self.bwd_packets)      # Backward packets as integer
         ]
     
     def to_dict(self):
@@ -86,6 +87,7 @@ class Flow:
             'Dst IP': self.dst_ip,
             'Dst Port': self.dst_port,
             'Protocol': self.protocol,  # Keep as string for display
+            'Interface': self.interface if self.interface else "Unknown",
             'Flow Duration': f"{self.flow_duration:.4f}s",
             'Tot Fwd Pkts': self.fwd_packets,
             'Tot Bwd Pkts': self.bwd_packets,
@@ -94,8 +96,8 @@ class Flow:
         
 class PacketAnalyzer:
     """Main analyzer class that captures and processes packets"""
-    def __init__(self, interface=None):
-        self.interface = interface
+    def __init__(self, interfaces=None):
+        self.interfaces = interfaces  # Can be a list of interfaces or None for all
         self.flows = {}
         self.flow_lock = threading.Lock()
         self.packet_queue = queue.Queue()
@@ -103,6 +105,12 @@ class PacketAnalyzer:
         self.model = None
         self.model_loaded = False
         self.model_queue = queue.Queue()
+        self.capture_threads = []
+        
+    def get_all_interfaces(self):
+        """Get a list of all available network interfaces"""
+        # Use Scapy's conf.ifaces to get all interfaces
+        return list(scapy_conf.ifaces.keys())
         
     def load_model(self):
         """Load the ML model from model.pkl file"""
@@ -123,7 +131,7 @@ class PacketAnalyzer:
             print("Using fallback model due to error")
     
     def start_capture(self):
-        """Start packet capture in a separate thread"""
+        """Start packet capture in a separate thread for each interface"""
         if self.is_capturing:
             return
             
@@ -135,22 +143,38 @@ class PacketAnalyzer:
         # Start packet processing thread
         threading.Thread(target=self.process_packets, daemon=True).start()
         
-        # Start packet capturing thread
-        threading.Thread(target=self._capture_packets, daemon=True).start()
+        # If interfaces is None or "all", get all available interfaces
+        if self.interfaces is None or self.interfaces == "all":
+            self.interfaces = self.get_all_interfaces()
+            print(f"Capturing on all interfaces: {self.interfaces}")
+        
+        # Start a capture thread for each interface
+        for iface in self.interfaces:
+            capture_thread = threading.Thread(
+                target=self._capture_packets, 
+                args=(iface,),
+                daemon=True
+            )
+            capture_thread.start()
+            self.capture_threads.append(capture_thread)
     
     def stop_capture(self):
         """Stop packet capture"""
         self.is_capturing = False
+        # Clear the capture threads list
+        self.capture_threads = []
     
-    def _capture_packets(self):
-        """Capture packets using Scapy"""
+    def _capture_packets(self, interface):
+        """Capture packets using Scapy for a specific interface"""
         try:
-            sniff(iface=self.interface, prn=self._packet_callback, store=False, 
-                  stop_filter=lambda p: not self.is_capturing)
+            print(f"Started capturing on interface: {interface}")
+            sniff(iface=interface, prn=lambda pkt: self._packet_callback(pkt, interface), 
+                  store=False, stop_filter=lambda p: not self.is_capturing)
+            print(f"Stopped capturing on interface: {interface}")
         except Exception as e:
-            print(f"Error in packet capture: {e}")
+            print(f"Error in packet capture on interface {interface}: {e}")
     
-    def _packet_callback(self, packet):
+    def _packet_callback(self, packet, interface):
         """Callback function for each captured packet"""
         if not (IP in packet):
             return
@@ -176,29 +200,33 @@ class PacketAnalyzer:
         # Create flow key
         flow_key = FlowKey(src_ip, dst_ip, src_port, dst_port, protocol)
         
-        # Add packet to queue for processing
-        self.packet_queue.put((flow_key, datetime.now()))
+        # Add packet to queue for processing with interface information
+        self.packet_queue.put((flow_key, datetime.now(), interface))
     
     def process_packets(self):
         """Process packets from the queue and update flows"""
         while self.is_capturing:
             try:
-                flow_key, timestamp = self.packet_queue.get(timeout=1)
+                flow_key, timestamp, interface = self.packet_queue.get(timeout=1)
                 
                 with self.flow_lock:
+                    # Generate a composite key that includes the interface
+                    composite_key = (flow_key, interface)
+                    reverse_composite_key = (flow_key.reverse(), interface)
+                    
                     # Check if this is a new flow or part of an existing flow (forward or backward)
-                    if flow_key in self.flows:
-                        flow = self.flows[flow_key]
+                    if composite_key in self.flows:
+                        flow = self.flows[composite_key]
                         flow.fwd_packets += 1
-                    elif flow_key.reverse() in self.flows:
-                        flow = self.flows[flow_key.reverse()]
+                    elif reverse_composite_key in self.flows:
+                        flow = self.flows[reverse_composite_key]
                         flow.bwd_packets += 1
                     else:
                         # New flow
-                        flow = Flow(flow_key)
+                        flow = Flow(flow_key, interface)
                         flow.start_time = timestamp
                         flow.fwd_packets = 1
-                        self.flows[flow_key] = flow
+                        self.flows[composite_key] = flow
                     
                     # Update the last seen timestamp
                     flow.last_time = timestamp
@@ -239,7 +267,7 @@ class NetworkAnalyzerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Network Flow Analyzer")
-        self.root.geometry("1200x600")  # Increased width to accommodate IP columns
+        self.root.geometry("1300x600")  # Increased width to accommodate Interface column
         
         self.analyzer = PacketAnalyzer()
         self.create_widgets()
@@ -250,6 +278,21 @@ class NetworkAnalyzerGUI:
         # Control frame
         control_frame = ttk.Frame(self.root, padding=10)
         control_frame.pack(fill=tk.X)
+        
+        # Interface selection
+        ttk.Label(control_frame, text="Network Interface:").pack(side=tk.LEFT, padx=5)
+        self.interface_var = tk.StringVar(value="all")
+        
+        # Get all available interfaces
+        interfaces = ["all"] + self.analyzer.get_all_interfaces()
+        
+        self.interface_dropdown = ttk.Combobox(
+            control_frame, 
+            textvariable=self.interface_var,
+            values=interfaces,
+            width=20
+        )
+        self.interface_dropdown.pack(side=tk.LEFT, padx=5)
         
         self.start_button = ttk.Button(control_frame, text="Start Capture", command=self.start_capture)
         self.start_button.pack(side=tk.LEFT, padx=5)
@@ -265,8 +308,8 @@ class NetworkAnalyzerGUI:
         table_frame = ttk.Frame(self.root, padding=10)
         table_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Create Treeview with IP columns added
-        columns = ['Src IP', 'Dst IP', 'Dst Port', 'Protocol', 'Flow Duration', 'Tot Fwd Pkts', 'Tot Bwd Pkts', 'Label']
+        # Create Treeview with Interface column added
+        columns = ['Src IP', 'Dst IP', 'Dst Port', 'Protocol', 'Interface', 'Flow Duration', 'Tot Fwd Pkts', 'Tot Bwd Pkts', 'Label']
         self.tree = ttk.Treeview(table_frame, columns=columns, show='headings')
         
         # Configure column headings
@@ -296,8 +339,16 @@ class NetworkAnalyzerGUI:
     
     def start_capture(self):
         """Start packet capture"""
+        selected_interface = self.interface_var.get()
+        
+        if selected_interface == "all":
+            self.analyzer.interfaces = "all"
+            self.status_var.set("Capturing packets on all interfaces...")
+        else:
+            self.analyzer.interfaces = [selected_interface]
+            self.status_var.set(f"Capturing packets on interface: {selected_interface}")
+        
         self.analyzer.start_capture()
-        self.status_var.set("Capturing packets...")
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         
@@ -328,13 +379,14 @@ class NetworkAnalyzerGUI:
                 # Find and update the row with this flow
                 for item_id in self.tree.get_children():
                     item = self.tree.item(item_id)
-                    if (item['values'][2] == updated_flow.dst_port and  # Index changed because of added IP columns
+                    if (item['values'][2] == updated_flow.dst_port and
                         item['values'][3] == updated_flow.protocol and
                         item['values'][0] == updated_flow.src_ip and
-                        item['values'][1] == updated_flow.dst_ip):
+                        item['values'][1] == updated_flow.dst_ip and
+                        item['values'][4] == updated_flow.interface):  # Added interface check
                         # Update the Label column
                         values = list(item['values'])
-                        values[7] = updated_flow.label  # Index changed to 7 because of added IP columns
+                        values[8] = updated_flow.label  # Index for Label changed to 8
                         
                         # Apply color based on label
                         if updated_flow.label.lower() == "malicious":
@@ -354,7 +406,7 @@ class NetworkAnalyzerGUI:
                 existing_items = {}
                 for item_id in self.tree.get_children():
                     item = self.tree.item(item_id)
-                    key = (item['values'][0], item['values'][1], item['values'][2], item['values'][3])
+                    key = (item['values'][0], item['values'][1], item['values'][2], item['values'][3], item['values'][4])
                     existing_items[key] = item_id
                 
                 # Update or create items
@@ -365,13 +417,14 @@ class NetworkAnalyzerGUI:
                         flow['Dst IP'],
                         flow['Dst Port'],
                         flow['Protocol'],
+                        flow['Interface'],  # Added Interface
                         flow['Flow Duration'],
                         flow['Tot Fwd Pkts'],
                         flow['Tot Bwd Pkts'],
                         flow['Label']
                     ]
                     
-                    key = (flow['Src IP'], flow['Dst IP'], flow['Dst Port'], flow['Protocol'])
+                    key = (flow['Src IP'], flow['Dst IP'], flow['Dst Port'], flow['Protocol'], flow['Interface'])
                     current_items.add(key)
                     
                     tag = 'benign' if flow['Label'].lower() == 'benign' else 'malicious' if flow['Label'].lower() == 'malicious' else ''
