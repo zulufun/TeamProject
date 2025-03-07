@@ -96,21 +96,22 @@ class PacketAnalyzer:
         self.model_queue = queue.Queue()
         
     def load_model(self):
-        """Simulate loading an ML model (replace with actual model loading)"""
+        """Load the ML model from model.pkl file"""
         print("Loading model...")
-        time.sleep(2)  # Simulating loading time
-        
-        # This is a dummy model for demonstration - replace with a real model
-        class DummyModel:
-            def predict(self, X):
-                # Only return "benign" or "malicious" labels
-                # Simple logic: even ports are benign, odd ports are malicious
-                # Replace this with your actual model
-                return ["benign" if x[0] % 2 == 0 else "malicious" for x in X]
-        
-        self.model = DummyModel()
-        self.model_loaded = True
-        print("Model loaded")
+        try:
+            # Load the trained model from a file
+            self.model = joblib.load('model.pkl')
+            self.model_loaded = True
+            print("Model loaded successfully")
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            # Fallback to a dummy model if loading fails
+            class DummyModel:
+                def predict(self, X):
+                    return ["benign" for _ in X]  # Default to benign
+            self.model = DummyModel()
+            self.model_loaded = True
+            print("Using fallback model due to error")
     
     def start_capture(self):
         """Start packet capture in a separate thread"""
@@ -195,10 +196,16 @@ class PacketAnalyzer:
                     
                     # Try to predict label if model is loaded
                     if self.model_loaded and flow.label == "Loading...":
-                        features = flow.to_feature_vector()
-                        prediction = self.model.predict([features])[0]
-                        flow.label = prediction
-                        self.model_queue.put(flow)
+                        try:
+                            features = np.array([flow.to_feature_vector()])
+                            prediction = self.model.predict(features)[0]
+                            # Make sure the label is a string
+                            flow.label = str(prediction)
+                            self.model_queue.put(flow)
+                        except Exception as e:
+                            print(f"Error predicting flow label: {e}")
+                            flow.label = "Error"
+                            self.model_queue.put(flow)
                 
             except queue.Empty:
                 continue
@@ -241,6 +248,10 @@ class NetworkAnalyzerGUI:
         self.stop_button = ttk.Button(control_frame, text="Stop Capture", command=self.stop_capture, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=5)
         
+        # Status indicator for model
+        self.model_status = ttk.Label(control_frame, text="Model: Not Loaded")
+        self.model_status.pack(side=tk.RIGHT, padx=5)
+        
         # Table frame
         table_frame = ttk.Frame(self.root, padding=10)
         table_frame.pack(fill=tk.BOTH, expand=True)
@@ -280,6 +291,17 @@ class NetworkAnalyzerGUI:
         self.status_var.set("Capturing packets...")
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
+        
+        # Update model status periodically
+        self.check_model_status()
+    
+    def check_model_status(self):
+        """Check and update the model loading status"""
+        if self.analyzer.model_loaded:
+            self.model_status.config(text="Model: Loaded")
+        else:
+            self.model_status.config(text="Model: Loading...")
+            self.root.after(500, self.check_model_status)
     
     def stop_capture(self):
         """Stop packet capture"""
@@ -304,16 +326,30 @@ class NetworkAnalyzerGUI:
                         # Update the Label column
                         values = list(item['values'])
                         values[7] = updated_flow.label  # Index changed to 7 because of added IP columns
-                        self.tree.item(item_id, values=values)
+                        
+                        # Apply color based on label
+                        if updated_flow.label.lower() == "malicious":
+                            self.tree.item(item_id, values=values, tags=('malicious',))
+                        else:
+                            self.tree.item(item_id, values=values, tags=('benign',))
+            
+            # Configure tag colors
+            self.tree.tag_configure('malicious', background='#ffcccc')  # Light red for malicious
+            self.tree.tag_configure('benign', background='#ccffcc')  # Light green for benign
             
             if self.analyzer.is_capturing:
                 # Get current flows
                 flows = self.analyzer.get_flows()
                 
-                # Clear existing items
-                self.tree.delete(*self.tree.get_children())
+                # Save existing items to avoid recreation (reduces flicker)
+                existing_items = {}
+                for item_id in self.tree.get_children():
+                    item = self.tree.item(item_id)
+                    key = (item['values'][0], item['values'][1], item['values'][2], item['values'][3])
+                    existing_items[key] = item_id
                 
-                # Insert new items
+                # Update or create items
+                current_items = set()
                 for flow in flows:
                     values = [
                         flow['Src IP'],
@@ -325,7 +361,24 @@ class NetworkAnalyzerGUI:
                         flow['Tot Bwd Pkts'],
                         flow['Label']
                     ]
-                    self.tree.insert('', tk.END, values=values)
+                    
+                    key = (flow['Src IP'], flow['Dst IP'], flow['Dst Port'], flow['Protocol'])
+                    current_items.add(key)
+                    
+                    tag = 'benign' if flow['Label'].lower() == 'benign' else 'malicious' if flow['Label'].lower() == 'malicious' else ''
+                    
+                    if key in existing_items:
+                        # Update existing item
+                        self.tree.item(existing_items[key], values=values, tags=(tag,) if tag else ())
+                    else:
+                        # Create new item
+                        self.tree.insert('', tk.END, values=values, tags=(tag,) if tag else ())
+                
+                # Remove items that no longer exist
+                for key, item_id in list(existing_items.items()):
+                    if key not in current_items:
+                        self.tree.delete(item_id)
+                
         except Exception as e:
             print(f"Error updating table: {e}")
         
