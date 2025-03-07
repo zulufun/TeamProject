@@ -1,0 +1,6 @@
+pandas
+sklearn
+plotly
+seaborn
+tensorflow
+distutils
