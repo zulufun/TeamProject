@@ -61,9 +61,16 @@ class Flow:
     
     def to_feature_vector(self):
         """Convert flow to feature vector for ML model"""
+        # Directly use numeric representation for protocol
+        protocol_num = 0  # Default for other protocols
+        if self.protocol == 'TCP':
+            protocol_num = 6
+        elif self.protocol == 'UDP':
+            protocol_num = 17
+            
         return [
             self.dst_port,
-            1 if self.protocol == 'TCP' else (2 if self.protocol == 'UDP' else 0),
+            protocol_num,  # Keep protocol as numeric value for the model
             self.flow_duration,
             self.fwd_packets,
             self.bwd_packets
@@ -75,14 +82,13 @@ class Flow:
             'Src IP': self.src_ip,
             'Dst IP': self.dst_ip,
             'Dst Port': self.dst_port,
-            'Protocol': self.protocol,
+            'Protocol': self.protocol,  # Keep as string for display
             'Flow Duration': f"{self.flow_duration:.4f}s",
             'Tot Fwd Pkts': self.fwd_packets,
             'Tot Bwd Pkts': self.bwd_packets,
             'Label': self.label
         }
-
-
+        
 class PacketAnalyzer:
     """Main analyzer class that captures and processes packets"""
     def __init__(self, interface=None):
