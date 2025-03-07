@@ -57,7 +57,7 @@ class Flow:
     def flow_duration(self):
         """Calculate flow duration in microseconds"""
         if self.start_time and self.last_time:
-            return (self.last_time - self.start_time).total_seconds() * 1000  # Convert to microseconds
+            return (self.last_time - self.start_time).total_seconds() * 1000000  # Convert to microseconds
         return 0
     
     def to_feature_vector(self):
