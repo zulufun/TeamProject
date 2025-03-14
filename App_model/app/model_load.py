@@ -130,7 +130,7 @@ class PacketAnalyzer:
         print("Loading model...")
         try:
             # Load the trained model from a file
-            self.model = joblib.load('model.pkl')
+            self.model = joblib.load('../models/model.pkl')
             self.model_loaded = True
             print("Model loaded successfully")
         except Exception as e:
